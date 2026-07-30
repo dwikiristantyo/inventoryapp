@@ -3,6 +3,7 @@
 
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../config/helpers.php';
+require_once __DIR__ . '/../../includes/layout.php';
 
 $current_user = 'admin';
 
@@ -160,6 +161,7 @@ $excelParams = http_build_query([
     'filter_to'     => $filter_to,
     'filter_icodes' => $filter_icodes
 ]);
+render_header("Report");
 ?>
 
 <!DOCTYPE html>

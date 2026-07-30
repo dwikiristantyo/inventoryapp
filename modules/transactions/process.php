@@ -3,6 +3,7 @@
 
 require_once '../../config/database.php';
 require_once '../../config/helpers.php';
+require_once __DIR__ . '/../../includes/layout.php';
 
 $current_user = 'admin'; // Sesuaikan dengan session user aktif
 

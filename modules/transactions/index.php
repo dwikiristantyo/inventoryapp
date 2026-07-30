@@ -3,6 +3,7 @@
 
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../config/helpers.php';
+require_once __DIR__ . '/../../includes/layout.php';
 
 $current_user = 'admin'; 
 $user_role    = 'SUPERADMIN'; 
@@ -70,18 +71,21 @@ $stmtList->execute($params);
 $listData = $stmtList->fetchAll(PDO::FETCH_ASSOC);
 
 // Master Item Dropdown
+// Master Item Dropdown (Menampilkan Semua Item: Kode Item - Nama Item)
 $stmtItem = $pdo->query("SELECT icode, desc1, uom FROM itemast WHERE stock = 'A' ORDER BY icode ASC");
-$rawItems = $stmtItem->fetchAll();
+$rawItems = $stmtItem->fetchAll(PDO::FETCH_ASSOC);
+
 $groupedItems = [];
 foreach ($rawItems as $item) {
-    $baseCode = substr($item['icode'], 0, 5); 
-    $cleanDesc = trim(preg_replace('/\s*\((KG|PCS)\)\s*/i', '', $item['desc1']));
-    if (!isset($groupedItems[$baseCode])) {
-        $groupedItems[$baseCode] = ['base_code' => $baseCode, 'desc' => $cleanDesc, 'code_kg' => '', 'code_pcs' => ''];
-    }
-    if (strtoupper($item['uom']) === 'KG') $groupedItems[$baseCode]['code_kg'] = $item['icode'];
-    elseif (strtoupper($item['uom']) === 'PCS') $groupedItems[$baseCode]['code_pcs'] = $item['icode'];
+    // Menyimpan icode sebagai key agar setiap item berdiri sendiri (tidak ter-group)
+    $groupedItems[$item['icode']] = [
+        'base_code' => $item['icode'],
+        // Format Tampilan: KODE_ITEM - DESKRIPSI
+        'desc'      => $item['icode'] . ' - ' . $item['desc1'],
+        'uom'       => $item['uom']
+    ];
 }
+render_header("Transaction");
 ?>
 
 <!DOCTYPE html>
@@ -399,10 +403,12 @@ function addRow() {
     const newRow = table.insertRow();
     newRow.innerHTML = `
         <td>
-            <select name="items[${rowIdx}][item_base]" required>
+            <select name="items[${rowIdx}][icode]" required>
                 <option value="">-- Pilih Barang --</option>
-                <?php foreach ($groupedItems as $item): ?>
-                    <option value="<?= htmlspecialchars($item['base_code']) ?>"><?= htmlspecialchars($item['desc']) ?></option>
+                <?php foreach ($rawItems as $item): ?>
+                    <option value="<?= htmlspecialchars($item['icode']) ?>">
+                        <?= htmlspecialchars($item['icode']) ?> - <?= htmlspecialchars($item['desc1']) ?>
+                    </option>
                 <?php endforeach; ?>
             </select>
         </td>
