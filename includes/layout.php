@@ -48,7 +48,8 @@ $menu_structure = [
     'Laporan' => [
         'icon' => '📊',
         'items' => [
-            'm_report' => ['label' => 'Reports', 'link' => 'modules/reports/index.php'],
+            'm_report'              => ['label' => 'Reports',              'link' => 'modules/reports/index.php'],
+            'm_report_daily_matrix' => ['label' => 'Reports Daily Matrix', 'link' => 'modules/reports/daily_matrix.php'],
         ]
     ],
     'System Admin' => [
@@ -72,11 +73,15 @@ $base_url = get_base_url();
 
 function render_header($title = "Inventory System") {
     global $menu_structure, $allowed_menus, $user_id, $user_name, $group_id, $base_url;
+    
+    // Mendapatkan nama file script saat ini untuk penanda menu aktif (.active)
+    $current_script = basename($_SERVER['SCRIPT_NAME']);
     ?>
     <!DOCTYPE html>
     <html lang="id">
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title><?= htmlspecialchars($title) ?></title>
         <style>
             * { box-sizing: border-box; }
@@ -89,13 +94,14 @@ function render_header($title = "Inventory System") {
             .sidebar-user .name { color: #fff; font-weight: bold; font-size: 13px; }
             .sidebar-menu { list-style: none; padding: 10px 0; margin: 0; flex-grow: 1; overflow-y: auto; }
             .menu-header { font-size: 11px; text-transform: uppercase; color: #6c757d; padding: 10px 15px 4px; font-weight: bold; }
-            .sidebar-menu a { display: block; padding: 8px 15px; color: #c2c7d0; text-decoration: none; font-size: 13px; }
+            .sidebar-menu a { display: block; padding: 8px 15px; color: #c2c7d0; text-decoration: none; font-size: 13px; transition: background 0.2s, color 0.2s; }
             .sidebar-menu a:hover { background: #343a40; color: #fff; }
+            .sidebar-menu a.active { background: #0d6efd; color: #fff; font-weight: bold; }
             
             /* MAIN CONTENT STYLES */
-            .wrapper { flex-grow: 1; display: flex; flex-direction: column; }
+            .wrapper { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }
             .top-nav { height: 50px; background: #fff; border-bottom: 1px solid #dee2e6; display: flex; align-items: center; justify-content: flex-end; padding: 0 20px; }
-            .btn-logout { font-size: 12px; color: #dc3545; text-decoration: none; font-weight: bold; border: 1px solid #dc3545; padding: 4px 10px; border-radius: 4px; }
+            .btn-logout { font-size: 12px; color: #dc3545; text-decoration: none; font-weight: bold; border: 1px solid #dc3545; padding: 4px 10px; border-radius: 4px; transition: all 0.2s; }
             .btn-logout:hover { background: #dc3545; color: #fff; }
             .content-container { padding: 20px; flex-grow: 1; }
         </style>
@@ -112,7 +118,11 @@ function render_header($title = "Inventory System") {
         </div>
         
         <ul class="sidebar-menu">
-            <li><a href="<?= $base_url ?>index.php">🏠 Dashboard</a></li>
+            <li>
+                <a href="<?= $base_url ?>index.php" class="<?= ($current_script === 'index.php' && strpos($_SERVER['SCRIPT_NAME'], '/modules/') === false) ? 'active' : '' ?>">
+                    🏠 Dashboard
+                </a>
+            </li>
 
             <?php foreach ($menu_structure as $section_title => $section): ?>
                 <?php if (isset($section['items'])): ?>
@@ -125,8 +135,16 @@ function render_header($title = "Inventory System") {
 
                     <?php if (!empty($visible_items)): ?>
                         <li class="menu-header"><?= $section['icon'] ?> <?= $section_title ?></li>
-                        <?php foreach ($visible_items as $item): ?>
-                            <li><a href="<?= $base_url . $item['link'] ?>"><?= htmlspecialchars($item['label']) ?></a></li>
+                        <?php foreach ($visible_items as $key => $item): ?>
+                            <?php 
+                            $item_file = basename($item['link']);
+                            $is_active = ($current_script === $item_file && strpos($_SERVER['SCRIPT_NAME'], dirname($item['link'])) !== false);
+                            ?>
+                            <li>
+                                <a href="<?= $base_url . $item['link'] ?>" class="<?= $is_active ? 'active' : '' ?>">
+                                    <?= htmlspecialchars($item['label']) ?>
+                                </a>
+                            </li>
                         <?php endforeach; ?>
                     <?php endif; ?>
                 <?php endif; ?>
