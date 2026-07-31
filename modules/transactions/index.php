@@ -401,13 +401,13 @@ document.addEventListener('DOMContentLoaded', fetchDocNo);
 function addRow() {
     const table = document.getElementById('itemTable').getElementsByTagName('tbody')[0];
     const newRow = table.insertRow();
-    newRow.innerHTML = `
+newRow.innerHTML = `
         <td>
-            <select name="items[${rowIdx}][icode]" required>
+            <select name="items[${rowIdx}][item_base]" required>
                 <option value="">-- Pilih Barang --</option>
-                <?php foreach ($rawItems as $item): ?>
-                    <option value="<?= htmlspecialchars($item['icode']) ?>">
-                        <?= htmlspecialchars($item['icode']) ?> - <?= htmlspecialchars($item['desc1']) ?>
+                <?php foreach ($groupedItems as $item): ?>
+                    <option value="<?= htmlspecialchars($item['base_code']) ?>">
+                        <?= htmlspecialchars($item['desc']) ?>
                     </option>
                 <?php endforeach; ?>
             </select>

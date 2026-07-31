@@ -124,21 +124,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     INSERT INTO othindet (othinid, icode, qty, uom, qty2, uom2) 
                     VALUES (:doc_no, :icode, :qty, 'KG', :qty2, 'PCS')
                 ");
-                foreach ($items as $item) {
-                    $base_code = $item['item_base'] ?? '';
-                    $qty_kg    = (float)($item['qty_kg'] ?? 0);
-                    $qty_pcs   = (float)($item['qty_pcs'] ?? 0);
+foreach ($items as $item) {
+    $base_code = $item['item_base'] ?? '';
+    $qty_kg    = (float)($item['qty_kg'] ?? 0);
+    $qty_pcs   = (float)($item['qty_pcs'] ?? 0);
 
-                    if (!empty($base_code) && ($qty_kg > 0 || $qty_pcs > 0)) {
-                        $icode = $base_code . '1';
-                        $stmtDetail->execute([
-                            ':doc_no' => $doc_no,
-                            ':icode'  => $icode,
-                            ':qty'    => $qty_kg,
-                            ':qty2'   => $qty_pcs
-                        ]);
-                    }
-                }
+    if (!empty($base_code) && ($qty_kg != 0 || $qty_pcs != 0)) {
+        // PERBAIKAN: Ubah $icode = $base_code . '1'; menjadi $icode = $base_code;
+        $icode = $base_code; 
+        
+        $stmtDetail->execute([
+            ':doc_no' => $doc_no,
+            ':icode'  => $icode,
+            ':qty'    => $qty_kg,
+            ':qty2'   => $qty_pcs
+        ]);
+    }
+}
 
             } elseif ($type === 'OUT') {
                 // Header Barang Keluar
@@ -165,7 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $qty_pcs   = (float)($item['qty_pcs'] ?? 0);
 
                     if (!empty($base_code) && ($qty_kg > 0 || $qty_pcs > 0)) {
-                        $icode = $base_code . '1';
+                        $icode = $base_code;
                         $stmtDetail->execute([
                             ':doc_no' => $doc_no,
                             ':icode'  => $icode,
@@ -200,7 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $qty_pcs   = (float)($item['qty_pcs'] ?? 0);
 
                     if (!empty($base_code) && ($qty_kg != 0 || $qty_pcs != 0)) {
-                        $icode = $base_code . '1';
+                        $icode = $base_code;
                         $stmtDetail->execute([
                             ':doc_no' => $doc_no,
                             ':icode'  => $icode,

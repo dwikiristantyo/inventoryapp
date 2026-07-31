@@ -4,9 +4,9 @@
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../config/helpers.php';
 
-$filter_whid  = $_GET['filter_whid'] ?? '';
-$filter_from  = $_GET['filter_from'] ?? date('Y-m-01');
-$filter_to    = $_GET['filter_to'] ?? date('Y-m-d');
+$filter_whid   = $_GET['filter_whid'] ?? '';
+$filter_from   = $_GET['filter_from'] ?? date('Y-m-01');
+$filter_to     = $_GET['filter_to'] ?? date('Y-m-d');
 $filter_icodes = $_GET['filter_icodes'] ?? ['ALL'];
 
 if (empty($filter_whid)) die("Gudang harus dipilih.");
@@ -19,11 +19,9 @@ function filename_header($filename) {
     header("Content-Disposition: attachment; filename=\"$filename.xls\"");
 }
 
-// Set Header Download Excel
 filename_header("Laporan_Mutasi_Stok_{$filter_whid}_" . date('Ymd'));
 header("Content-Type: application/vnd.ms-excel");
 
-// Fetch Data Barang
 if (in_array('ALL', $filter_icodes) || empty($filter_icodes)) {
     $stmtItems = $pdo->prepare("SELECT icode, desc1 FROM itemast WHERE stock = 'A' ORDER BY icode ASC");
     $stmtItems->execute();
@@ -76,19 +74,19 @@ foreach ($master_items as $item) {
     // Mutasi
     $sqlTrans = "
         SELECT 
-            t.trans_date, t.remark, t.type, t.qty AS kg, t.qty2 AS pcs
+            t.trans_date, t.trans_id, t.remark, t.type, t.qty AS kg, t.qty2 AS pcs
         FROM (
-            SELECT m.othindate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'IN' AS type 
+            SELECT m.othinid AS trans_id, m.othindate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'IN' AS type 
             FROM othinmas m JOIN othindet d ON m.othinid = d.othinid WHERE m.status != 'X'
             UNION ALL
-            SELECT m.othoutdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'OUT' AS type 
+            SELECT m.othoutid AS trans_id, m.othoutdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'OUT' AS type 
             FROM othoutmas m JOIN othoutdet d ON m.othoutid = d.othoutid WHERE m.status != 'X'
             UNION ALL
-            SELECT m.adjdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'ADJ' AS type 
+            SELECT m.adjid AS trans_id, m.adjdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'ADJ' AS type 
             FROM adjmas m JOIN adjdet d ON m.adjid = d.adjid WHERE m.status != 'X'
         ) t
         WHERE t.whid = :whid AND t.icode = :icode AND t.trans_date BETWEEN :from_date AND :to_date
-        ORDER BY t.trans_date ASC
+        ORDER BY t.trans_date ASC, FIELD(t.type, 'ADJ', 'IN', 'OUT'), t.trans_id ASC
     ";
     $stmtTrans = $pdo->prepare($sqlTrans);
     $stmtTrans->execute([
@@ -99,19 +97,20 @@ foreach ($master_items as $item) {
     ]);
     $mutations = $stmtTrans->fetchAll(PDO::FETCH_ASSOC);
 
-    $ledger_rows = [];
+    $grouped_mutations = [];
     $first_date = date('Y-m-d', strtotime($filter_from . ' -1 day'));
-    $ledger_rows[] = [
-        'date'      => $first_date,
-        'remark'    => 'Closing Balance',
-        'in_kg'     => 0, 'in_pcs'  => 0,
-        'out_kg'    => 0, 'out_pcs' => 0,
-        'adj_kg'    => 0, 'adj_pcs' => 0,
-        'bal_kg'    => $running_kg,
-        'bal_pcs'   => $running_pcs
+    $grouped_mutations[$first_date][] = [
+        'type'    => 'INIT',
+        'remark'  => 'Closing Balance',
+        'in_kg'   => 0, 'in_pcs'  => 0,
+        'out_kg'  => 0, 'out_pcs' => 0,
+        'adj_kg'  => 0, 'adj_pcs' => 0,
+        'bal_kg'  => $running_kg,
+        'bal_pcs' => $running_pcs
     ];
 
     foreach ($mutations as $m) {
+        $date = $m['trans_date'];
         $in_kg   = ($m['type'] === 'IN')  ? (float)$m['kg']  : 0;
         $in_pcs  = ($m['type'] === 'IN')  ? (float)$m['pcs'] : 0;
         $out_kg  = ($m['type'] === 'OUT') ? (float)$m['kg']  : 0;
@@ -122,8 +121,8 @@ foreach ($master_items as $item) {
         $running_kg  += ($in_kg - $out_kg + $adj_kg);
         $running_pcs += ($in_pcs - $out_pcs + $adj_pcs);
 
-        $ledger_rows[] = [
-            'date'    => $m['trans_date'],
+        $grouped_mutations[$date][] = [
+            'type'    => $m['type'],
             'remark'  => $m['remark'] ?: ($m['type'] === 'IN' ? 'Barang Masuk' : ($m['type'] === 'OUT' ? 'Barang Keluar' : 'Adjustment')),
             'in_kg'   => $in_kg,   'in_pcs'  => $in_pcs,
             'out_kg'  => $out_kg,  'out_pcs' => $out_pcs,
@@ -136,7 +135,7 @@ foreach ($master_items as $item) {
     $items_report[] = [
         'icode'     => $item['icode'],
         'desc1'     => $item['desc1'],
-        'rows'      => $ledger_rows,
+        'grouped'   => $grouped_mutations,
         'final_kg'  => $running_kg,
         'final_pcs' => $running_pcs
     ];
@@ -147,16 +146,16 @@ foreach ($master_items as $item) {
     <h3><?= htmlspecialchars($item['icode']) ?> - <?= htmlspecialchars($item['desc1']) ?> (UOM: KG & Butir)</h3>
     <table border="1">
         <thead>
-            <tr>
+            <tr style="background-color: #8EA9DB; font-weight: bold;">
                 <th rowspan="2">Tanggal</th>
                 <th rowspan="2">Keterangan</th>
                 <th colspan="2">Saldo Awal</th>
                 <th colspan="2">Masuk (IN)</th>
                 <th colspan="2">Keluar (OUT)</th>
-                <th colspan="2">Adjustment</th>
+                <th colspan="2">Adjustm</th>
                 <th colspan="2">Saldo Akhir</th>
             </tr>
-            <tr>
+            <tr style="background-color: #8EA9DB; font-weight: bold;">
                 <th>KG</th>
                 <th>Butir</th>
                 <th>KG</th>
@@ -170,28 +169,49 @@ foreach ($master_items as $item) {
             </tr>
         </thead>
         <tbody>
-            <?php foreach ($item['rows'] as $r): ?>
-                <tr>
-                    <td align="center"><?= date('d-m-Y', strtotime($r['date'])) ?></td>
-                    <td><?= htmlspecialchars($r['remark']) ?></td>
-                    <td align="right"><?= number_format($r['bal_kg'] - ($r['in_kg'] - $r['out_kg'] + $r['adj_kg']), 2) ?></td>
-                    <td align="right"><?= number_format($r['bal_pcs'] - ($r['in_pcs'] - $r['out_pcs'] + $r['adj_pcs'])) ?></td>
-                    <td align="right"><?= number_format($r['in_kg'], 2) ?></td>
-                    <td align="right"><?= number_format($r['in_pcs']) ?></td>
-                    <td align="right"><?= number_format($r['out_kg'], 2) ?></td>
-                    <td align="right"><?= number_format($r['out_pcs']) ?></td>
-                    <td align="right"><?= number_format($r['adj_kg'], 2) ?></td>
-                    <td align="right"><?= number_format($r['adj_pcs']) ?></td>
-                    <td align="right"><?= number_format($r['bal_kg'], 2) ?></td>
-                    <td align="right"><?= number_format($r['bal_pcs']) ?></td>
-                </tr>
+            <?php foreach ($item['grouped'] as $date => $rows): 
+                $last_row_bal_kg = 0;
+                $last_row_bal_pcs = 0;
+            ?>
+                <?php foreach ($rows as $r): 
+                    $last_row_bal_kg = $r['bal_kg'];
+                    $last_row_bal_pcs = $r['bal_pcs'];
+                    
+                    $init_kg = $r['bal_kg'] - ($r['in_kg'] - $r['out_kg'] + $r['adj_kg']);
+                    $init_pcs = $r['bal_pcs'] - ($r['in_pcs'] - $r['out_pcs'] + $r['adj_pcs']);
+                ?>
+                    <tr>
+                        <td align="center"><?= date('d-m-Y', strtotime($date)) ?></td>
+                        <td><?= htmlspecialchars($r['remark']) ?></td>
+                        <td align="right"><?= number_format($init_kg, 2) ?></td>
+                        <td align="right"><?= number_format($init_pcs) ?></td>
+                        <td align="right"><?= number_format($r['in_kg'], 2) ?></td>
+                        <td align="right"><?= number_format($r['in_pcs']) ?></td>
+                        <td align="right"><?= number_format($r['out_kg'], 2) ?></td>
+                        <td align="right"><?= number_format($r['out_pcs']) ?></td>
+                        <td align="right"><?= number_format($r['adj_kg'], 2) ?></td>
+                        <td align="right"><?= number_format($r['adj_pcs']) ?></td>
+                        <td align="right"><?= number_format($r['bal_kg'], 2) ?></td>
+                        <td align="right"><?= number_format($r['bal_pcs']) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+
+                <?php if (count($rows) > 0 && $rows[0]['type'] !== 'INIT'): ?>
+                    <tr style="background-color: #FFFF00; font-weight: bold;">
+                        <td align="center"><?= date('d-m-Y', strtotime($date)) ?></td>
+                        <td colspan="9" align="center">TOTAL SALDO</td>
+                        <td align="right"><?= number_format($last_row_bal_kg, 2) ?></td>
+                        <td align="right"><?= number_format($last_row_bal_pcs) ?></td>
+                    </tr>
+                <?php endif; ?>
+
             <?php endforeach; ?>
         </tbody>
         <tfoot>
-            <tr>
-                <th colspan="10" align="center">TOTAL SALDO AKHIR</th>
-                <th align="right"><b><?= number_format($item['final_kg'], 2) ?></b></th>
-                <th align="right"><b><?= number_format($item['final_pcs']) ?></b></th>
+            <tr style="font-weight: bold; background-color: #f1f1f1;">
+                <td colspan="10" align="center">TOTAL SALDO AKHIR</td>
+                <td align="right"><?= number_format($item['final_kg'], 2) ?></td>
+                <td align="right"><?= number_format($item['final_pcs']) ?></td>
             </tr>
         </tfoot>
     </table>

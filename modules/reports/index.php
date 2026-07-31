@@ -11,17 +11,16 @@ $current_user = 'admin';
 $warehouses = getUserWarehouses($pdo, $current_user);
 
 // 2. Filter Parameters
-$filter_from  = $_GET['filter_from'] ?? date('Y-m-01');
-$filter_to    = $_GET['filter_to'] ?? date('Y-m-d');
-$filter_whid  = $_GET['filter_whid'] ?? ($warehouses[0]['whid'] ?? '');
-$filter_icodes = $_GET['filter_icodes'] ?? ['ALL']; // Default ALL
+$filter_from   = $_GET['filter_from'] ?? date('Y-m-01');
+$filter_to     = $_GET['filter_to'] ?? date('Y-m-d');
+$filter_whid   = $_GET['filter_whid'] ?? ($warehouses[0]['whid'] ?? '');
+$filter_icodes = $_GET['filter_icodes'] ?? ['ALL'];
 
-// Jika $filter_icodes bukan array (misal string tunggal dari query param), diubah ke array
 if (!is_array($filter_icodes)) {
     $filter_icodes = [$filter_icodes];
 }
 
-// Ambil Daftar Semua Barang untuk Dropdown Filter
+// Ambil Daftar Semua Barang untuk Dropdown
 $stmtAllItems = $pdo->prepare("SELECT icode, desc1 FROM itemast WHERE stock = 'A' ORDER BY icode ASC");
 $stmtAllItems->execute();
 $all_master_items = $stmtAllItems->fetchAll(PDO::FETCH_ASSOC);
@@ -29,7 +28,6 @@ $all_master_items = $stmtAllItems->fetchAll(PDO::FETCH_ASSOC);
 $items_report = [];
 
 if (!empty($filter_whid)) {
-    // A. Filter Daftar Barang Berdasarkan Input Param
     if (in_array('ALL', $filter_icodes) || empty($filter_icodes)) {
         $master_items = $all_master_items;
     } else {
@@ -42,7 +40,7 @@ if (!empty($filter_whid)) {
     foreach ($master_items as $item) {
         $icode = $item['icode'];
 
-        // B. Hitung Saldo Awal (Sebelum tanggal filter_from)
+        // A. Hitung Saldo Awal (Sebelum tanggal filter_from)
         $sqlInit = "
             SELECT 
                 COALESCE(SUM(CASE WHEN t.type = 'IN' THEN t.qty ELSE 0 END), 0) -
@@ -75,26 +73,28 @@ if (!empty($filter_whid)) {
         $running_kg  = (float)($init_bal['init_kg'] ?? 0);
         $running_pcs = (float)($init_bal['init_pcs'] ?? 0);
 
-        // C. Ambil Mutasi Transaksi pada Periode Ini
+        // B. Query Mutasi Transaksi
+        // Urutan: Tanggal ASC -> Type (ADJ, IN, OUT) -> ID Transaksi ASC
         $sqlTrans = "
             SELECT 
                 t.trans_date,
+                t.trans_id,
                 t.remark,
                 t.type,
                 t.qty AS kg,
                 t.qty2 AS pcs
             FROM (
-                SELECT m.othindate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'IN' AS type 
+                SELECT m.othinid AS trans_id, m.othindate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'IN' AS type 
                 FROM othinmas m JOIN othindet d ON m.othinid = d.othinid WHERE m.status != 'X'
                 UNION ALL
-                SELECT m.othoutdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'OUT' AS type 
+                SELECT m.othoutid AS trans_id, m.othoutdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'OUT' AS type 
                 FROM othoutmas m JOIN othoutdet d ON m.othoutid = d.othoutid WHERE m.status != 'X'
                 UNION ALL
-                SELECT m.adjdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'ADJ' AS type 
+                SELECT m.adjid AS trans_id, m.adjdate AS trans_date, m.whid, d.icode, m.remark, d.qty, d.qty2, 'ADJ' AS type 
                 FROM adjmas m JOIN adjdet d ON m.adjid = d.adjid WHERE m.status != 'X'
             ) t
             WHERE t.whid = :whid AND t.icode = :icode AND t.trans_date BETWEEN :from_date AND :to_date
-            ORDER BY t.trans_date ASC
+            ORDER BY t.trans_date ASC, FIELD(t.type, 'ADJ', 'IN', 'OUT'), t.trans_id ASC
         ";
         $stmtTrans = $pdo->prepare($sqlTrans);
         $stmtTrans->execute([
@@ -105,23 +105,23 @@ if (!empty($filter_whid)) {
         ]);
         $mutations = $stmtTrans->fetchAll(PDO::FETCH_ASSOC);
 
-        // Disusun menjadi baris detail kronologis
-        $ledger_rows = [];
-
-        // Baris Pertama: Closing Balance / Saldo Awal Periode
+        // Subtotal Grouping berdasarkan Tanggal
+        $grouped_mutations = [];
+        
+        // Baris Pertama: Closing Balance
         $first_date = date('Y-m-d', strtotime($filter_from . ' -1 day'));
-        $ledger_rows[] = [
-            'date'      => $first_date,
-            'remark'    => 'Closing Balance',
-            'in_kg'     => 0, 'in_pcs'  => 0,
-            'out_kg'    => 0, 'out_pcs' => 0,
-            'adj_kg'    => 0, 'adj_pcs' => 0,
-            'bal_kg'    => $running_kg,
-            'bal_pcs'   => $running_pcs
+        $grouped_mutations[$first_date][] = [
+            'type'    => 'INIT',
+            'remark'  => 'Closing Balance',
+            'in_kg'   => 0, 'in_pcs'  => 0,
+            'out_kg'  => 0, 'out_pcs' => 0,
+            'adj_kg'  => 0, 'adj_pcs' => 0,
+            'bal_kg'  => $running_kg,
+            'bal_pcs' => $running_pcs
         ];
 
-        // Baris Pergerakan Mutasi
         foreach ($mutations as $m) {
+            $date = $m['trans_date'];
             $in_kg   = ($m['type'] === 'IN')  ? (float)$m['kg']  : 0;
             $in_pcs  = ($m['type'] === 'IN')  ? (float)$m['pcs'] : 0;
             $out_kg  = ($m['type'] === 'OUT') ? (float)$m['kg']  : 0;
@@ -129,12 +129,11 @@ if (!empty($filter_whid)) {
             $adj_kg  = ($m['type'] === 'ADJ') ? (float)$m['kg']  : 0;
             $adj_pcs = ($m['type'] === 'ADJ') ? (float)$m['pcs'] : 0;
 
-            // Update Saldo Akhir Berjalan
             $running_kg  += ($in_kg - $out_kg + $adj_kg);
             $running_pcs += ($in_pcs - $out_pcs + $adj_pcs);
 
-            $ledger_rows[] = [
-                'date'    => $m['trans_date'],
+            $grouped_mutations[$date][] = [
+                'type'    => $m['type'],
                 'remark'  => $m['remark'] ?: ($m['type'] === 'IN' ? 'Barang Masuk' : ($m['type'] === 'OUT' ? 'Barang Keluar' : 'Adjustment')),
                 'in_kg'   => $in_kg,   'in_pcs'  => $in_pcs,
                 'out_kg'  => $out_kg,  'out_pcs' => $out_pcs,
@@ -147,20 +146,20 @@ if (!empty($filter_whid)) {
         $items_report[] = [
             'icode'     => $item['icode'],
             'desc1'     => $item['desc1'],
-            'rows'      => $ledger_rows,
+            'grouped'   => $grouped_mutations,
             'final_kg'  => $running_kg,
             'final_pcs' => $running_pcs
         ];
     }
 }
 
-// Build query parameter URL untuk Export Excel
 $excelParams = http_build_query([
     'filter_whid'   => $filter_whid,
     'filter_from'   => $filter_from,
     'filter_to'     => $filter_to,
     'filter_icodes' => $filter_icodes
 ]);
+
 render_header("Report");
 ?>
 
@@ -183,17 +182,22 @@ render_header("Report");
         .btn-success { background-color: #2e7d32; color: white; }
         .btn-secondary { background-color: #eceff1; color: #37474f; }
 
-        /* Style Laporan */
-        .item-title { font-size: 15px; font-weight: bold; margin-top: 25px; margin-bottom: 8px; color: #000; }
+        .item-title { font-size: 16px; font-weight: bold; margin-top: 25px; margin-bottom: 8px; color: #000; }
         .item-title span.uom { font-weight: normal; color: #6c757d; font-size: 13px; }
 
         table.ledger-table { width: 100%; border-collapse: collapse; margin-bottom: 25px; font-size: 12px; }
-        table.ledger-table th, table.ledger-table td { border: 1px solid #000; padding: 6px 8px; }
-        table.ledger-table th { background-color: #fff; font-weight: bold; text-align: center; }
+        table.ledger-table th, table.ledger-table td { border: 1px solid #000; padding: 5px 8px; }
+        
+        /* 1. Header Warna Biru */
+        table.ledger-table th { background-color: #8EA9DB; font-weight: bold; text-align: center; color: #000; }
+        
         .text-right { text-align: right; }
         .text-center { text-align: center; }
         .text-left { text-align: left; }
-        .total-row { font-weight: bold; }
+        
+        /* 2. Style Subtotal Warna Kuning */
+        .subtotal-row { background-color: #FFFF00; font-weight: bold; }
+        .grand-total-row { font-weight: bold; background-color: #f1f1f1; }
 
         @media print {
             .no-print { display: none; }
@@ -205,7 +209,7 @@ render_header("Report");
 <body>
 
 <div class="card no-print">
-    <h2 style="margin-top:0;">📊 Filter Laporan Mutasi Stok</h2>
+    <h2 style="margin-top:0;"> Filter Laporan Mutasi Stok</h2>
     <form method="GET" action="index.php">
         <div class="row">
             <div class="col">
@@ -237,13 +241,13 @@ render_header("Report");
                 </div>
             </div>
             <div>
-                <button type="submit" class="btn btn-primary">🔍 Tampilkan</button>
+                <button type="submit" class="btn btn-primary"> Tampilkan</button>
             </div>
         </div>
     </form>
 </div>
 
-<!-- CONTAINER LAPORAN KARTU STOK -->
+<!-- CONTAINER LAPORAN -->
 <div class="card">
     <div style="display:flex; justify-content:space-between; align-items:center;" class="no-print">
         <div>
@@ -251,8 +255,8 @@ render_header("Report");
             <small>Gudang: <strong><?= htmlspecialchars($filter_whid) ?></strong> | Periode: <?= date('d-m-Y', strtotime($filter_from)) ?> s/d <?= date('d-m-Y', strtotime($filter_to)) ?></small>
         </div>
         <div>
-            <button onclick="window.print()" class="btn btn-secondary">🖨️ Cetak</button>
-            <a href="export_excel.php?<?= $excelParams ?>" class="btn btn-success">📥 Export Excel</a>
+            <button onclick="window.print()" class="btn btn-secondary"> Cetak</button>
+            <a href="export_excel.php?<?= $excelParams ?>" class="btn btn-success"> Export Excel</a>
         </div>
     </div>
 
@@ -265,12 +269,12 @@ render_header("Report");
         <table class="ledger-table">
             <thead>
                 <tr>
-                    <th rowspan="2" width="100">Tanggal</th>
-                    <th rowspan="2" width="220">Keterangan</th>
+                    <th rowspan="2" width="90">Tanggal</th>
+                    <th rowspan="2" width="200">Keterangan</th>
                     <th colspan="2">Saldo Awal</th>
                     <th colspan="2">Masuk (IN)</th>
                     <th colspan="2">Keluar (OUT)</th>
-                    <th colspan="2">Adjustment</th>
+                    <th colspan="2">Adjustm</th>
                     <th colspan="2">Saldo Akhir</th>
                 </tr>
                 <tr>
@@ -287,35 +291,57 @@ render_header("Report");
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($item['rows'] as $r): ?>
-                    <tr>
-                        <td class="text-center"><?= date('d-m-Y', strtotime($r['date'])) ?></td>
-                        <td class="text-left"><?= htmlspecialchars($r['remark']) ?></td>
+                <?php foreach ($item['grouped'] as $date => $rows): 
+                    $last_row_bal_kg = 0;
+                    $last_row_bal_pcs = 0;
+                ?>
+                    <?php foreach ($rows as $r): 
+                        $last_row_bal_kg = $r['bal_kg'];
+                        $last_row_bal_pcs = $r['bal_pcs'];
                         
-                        <!-- Saldo Awal -->
-                        <td class="text-right"><?= number_format($r['bal_kg'] - ($r['in_kg'] - $r['out_kg'] + $r['adj_kg']), 2) ?></td>
-                        <td class="text-right"><?= number_format($r['bal_pcs'] - ($r['in_pcs'] - $r['out_pcs'] + $r['adj_pcs'])) ?></td>
-                        
-                        <!-- Masuk -->
-                        <td class="text-right"><?= number_format($r['in_kg'], 2) ?></td>
-                        <td class="text-right"><?= number_format($r['in_pcs']) ?></td>
-                        
-                        <!-- Keluar -->
-                        <td class="text-right"><?= number_format($r['out_kg'], 2) ?></td>
-                        <td class="text-right"><?= number_format($r['out_pcs']) ?></td>
-                        
-                        <!-- Adjustment -->
-                        <td class="text-right"><?= number_format($r['adj_kg'], 2) ?></td>
-                        <td class="text-right"><?= number_format($r['adj_pcs']) ?></td>
-                        
-                        <!-- Saldo Akhir -->
-                        <td class="text-right"><?= number_format($r['bal_kg'], 2) ?></td>
-                        <td class="text-right"><?= number_format($r['bal_pcs']) ?></td>
-                    </tr>
+                        $init_kg = $r['bal_kg'] - ($r['in_kg'] - $r['out_kg'] + $r['adj_kg']);
+                        $init_pcs = $r['bal_pcs'] - ($r['in_pcs'] - $r['out_pcs'] + $r['adj_pcs']);
+                    ?>
+                        <tr>
+                            <td class="text-center"><?= date('d-m-Y', strtotime($date)) ?></td>
+                            <td class="text-left"><?= htmlspecialchars($r['remark']) ?></td>
+                            
+                            <!-- Saldo Awal -->
+                            <td class="text-right"><?= number_format($init_kg, 2) ?></td>
+                            <td class="text-right"><?= number_format($init_pcs) ?></td>
+                            
+                            <!-- Masuk -->
+                            <td class="text-right"><?= number_format($r['in_kg'], 2) ?></td>
+                            <td class="text-right"><?= number_format($r['in_pcs']) ?></td>
+                            
+                            <!-- Keluar -->
+                            <td class="text-right"><?= number_format($r['out_kg'], 2) ?></td>
+                            <td class="text-right"><?= number_format($r['out_pcs']) ?></td>
+                            
+                            <!-- Adjustm -->
+                            <td class="text-right"><?= number_format($r['adj_kg'], 2) ?></td>
+                            <td class="text-right"><?= number_format($r['adj_pcs']) ?></td>
+                            
+                            <!-- Saldo Akhir -->
+                            <td class="text-right"><?= number_format($r['bal_kg'], 2) ?></td>
+                            <td class="text-right"><?= number_format($r['bal_pcs']) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+
+                    <!-- Baris Subtotal per Tanggal (Kecuali Closing Balance / INIT) -->
+                    <?php if (count($rows) > 0 && $rows[0]['type'] !== 'INIT'): ?>
+                        <tr class="subtotal-row">
+                            <td class="text-center"><?= date('d-m-Y', strtotime($date)) ?></td>
+                            <td colspan="9" class="text-center">TOTAL SALDO</td>
+                            <td class="text-right"><?= number_format($last_row_bal_kg, 2) ?></td>
+                            <td class="text-right"><?= number_format($last_row_bal_pcs) ?></td>
+                        </tr>
+                    <?php endif; ?>
+
                 <?php endforeach; ?>
             </tbody>
             <tfoot>
-                <tr class="total-row">
+                <tr class="grand-total-row">
                     <td colspan="10" class="text-center">TOTAL SALDO AKHIR</td>
                     <td class="text-right"><?= number_format($item['final_kg'], 2) ?></td>
                     <td class="text-right"><?= number_format($item['final_pcs']) ?></td>
